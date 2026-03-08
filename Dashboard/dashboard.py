@@ -3,222 +3,409 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
-from scipy import stats
+from scipy.stats import pearsonr
 
-st.set_page_config(page_title="Bike Sharing Dashboard", layout="wide")
+# konfig
+st.set_page_config(
+    page_title="Bike Sharing Analytics Dashboard", 
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
-# Load Data
+# Load data
 @st.cache_data
 def load_data():
     df = pd.read_csv("Dashboard/all_data.csv")
     df["dteday"] = pd.to_datetime(df["dteday"])
-    df["season_label"] = df["season"].map({
-        1: "Spring", 2: "Summer", 3: "Fall", 4: "Winter"
+    
+    # Mapping musim
+    df["season_name"] = df["season"].map({
+        1: "Spring", 
+        2: "Summer", 
+        3: "Fall", 
+        4: "Winter"
     })
-    df["temp_c"] = (df["temp"] * 41).round(1)
+    
+    # Kategorisasi suhu
+    df['temp_category'] = pd.cut(
+        df['temp'], 
+        bins=[0, 0.3, 0.5, 0.7, 1.0],
+        labels=['Dingin', 'Sejuk', 'Hangat', 'Panas']
+    )
+    
     return df
 
 df = load_data()
 
-# Membuat Sidebar Filter
-st.sidebar.title("Filter Data")
 
-season_options = ["Semua"] + list(df["season_label"].unique())
-season_sel  = st.sidebar.selectbox("Musim", season_options)
+# Sidebar untuk filter data
+st.sidebar.title("🎛️ Filter Data")
+st.sidebar.markdown("---")
 
+# Filter Musim
+season_options = ["Semua Musim"] + sorted(df["season_name"].unique().tolist())
+selected_season = st.sidebar.selectbox("📅 Pilih Musim", season_options)
+
+# Filter Tanggal
 min_date = df["dteday"].min().date()
 max_date = df["dteday"].max().date()
 
-date_start = st.sidebar.date_input("Tanggal Mulai", value=min_date, min_value=min_date, max_value=max_date)
-date_end   = st.sidebar.date_input("Tanggal Akhir", value=max_date, min_value=min_date, max_value=max_date)
+date_range = st.sidebar.date_input(
+    "📆 Rentang Tanggal",
+    value=(min_date, max_date),
+    min_value=min_date,
+    max_value=max_date
+)
 
-# Apply filter sidebar
-dff = df.copy()
-if season_sel != "Semua":
-    dff = dff[dff["season_label"] == season_sel]
-dff = dff[(dff["dteday"].dt.date >= date_start) & (dff["dteday"].dt.date <= date_end)]
+if len(date_range) == 2:
+    start_date, end_date = date_range
+else:
+    start_date = end_date = date_range[0]
+
+# Filter Kategori Suhu
+temp_options = ["Semua Suhu"] + df["temp_category"].cat.categories.tolist()
+selected_temp = st.sidebar.selectbox("🌡️ Kategori Suhu", temp_options)
+
+
+
+# Apply filters
+filtered_df = df.copy()
+
+# Filter musim
+if selected_season != "Semua Musim":
+    filtered_df = filtered_df[filtered_df["season_name"] == selected_season]
+
+# Filter tanggal
+filtered_df = filtered_df[
+    (filtered_df["dteday"].dt.date >= start_date) & 
+    (filtered_df["dteday"].dt.date <= end_date)
+]
+
+# Filter suhu
+if selected_temp != "Semua Suhu":
+    filtered_df = filtered_df[filtered_df["temp_category"] == selected_temp]
 
 # Header
-st.title("Bike Sharing Dashboard")
-st.caption(f"Periode: {df['dteday'].min().strftime('%d %b %Y')} – {df['dteday'].max().strftime('%d %b %Y')} | Total data: {len(df):,} hari")
-st.divider()
+st.title("🚴 Bike Sharing Analytics Dashboard")
+st.markdown(f"""
+**Periode Data:** {df['dteday'].min().strftime('%d %b %Y')} - {df['dteday'].max().strftime('%d %b %Y')}  
+**Data Ditampilkan:** {len(filtered_df):,} hari dari total {len(df):,} hari
+""")
+st.markdown("---")
 
-# Ringkasan metrik utama
-sewa, rata, casual, registered = st.columns(4)
-sewa.metric("Total Penyewaan",  f"{dff['cnt'].sum():,}")
-rata.metric("Rata-rata Harian", f"{int(dff['cnt'].mean()):,}")
-casual.metric("Casual Users",     f"{dff['casual'].sum():,}")
-registered.metric("Registered Users", f"{dff['registered'].sum():,}")
+# Columns ringkasan
+col1, col2, col3, col4 = st.columns(4)
 
-st.divider()
+with col1:
+    total_rentals = filtered_df['cnt'].sum()
+    st.metric(
+        label="📊 Total Penyewaan",
+        value=f"{total_rentals:,}",
+        delta=f"{(total_rentals/df['cnt'].sum()*100):.1f}% dari total" if len(filtered_df) < len(df) else None
+    )
 
-# Diagram pertanyaan 1
-st.subheader("Pertanyaan 1: Pengaruh Musim terhadap Penyewaan Sepeda")
+with col2:
+    avg_rentals = filtered_df['cnt'].mean()
+    st.metric(
+        label="📈 Rata-rata Harian",
+        value=f"{int(avg_rentals):,}",
+        delta=f"{((avg_rentals - df['cnt'].mean())/df['cnt'].mean()*100):+.1f}%" if len(filtered_df) < len(df) else None
+    )
 
-season_agg = (
-    df.groupby("season_label")[["cnt", "casual", "registered"]]
-    .agg(total_cnt=("cnt","sum"), mean_cnt=("cnt","mean"),
-         total_casual=("casual","sum"), total_registered=("registered","sum"))
-    .reindex(["Spring","Summer","Fall","Winter"])
-    .reset_index()
-)
+with col3:
+    total_casual = filtered_df['casual'].sum()
+    st.metric(
+        label="👥 Casual Users",
+        value=f"{total_casual:,}",
+        delta=f"{(total_casual/filtered_df['cnt'].sum()*100):.1f}%"
+    )
+
+with col4:
+    total_registered = filtered_df['registered'].sum()
+    st.metric(
+        label="🎫 Registered Users",
+        value=f"{total_registered:,}",
+        delta=f"{(total_registered/filtered_df['cnt'].sum()*100):.1f}%"
+    )
+
+st.markdown("---")
+
+# Pertanyaan 1: Pola Penyewaan Berdasarkan Musim
+st.header("❄️ Pertanyaan 1: Pola Penyewaan Berdasarkan Musim")
+st.markdown("**Bagaimana pola penyewaan sepeda berbeda di setiap musim?**")
+
+# Hitung statistik per musim (dari filtered data)
+season_stats = filtered_df.groupby('season_name')['cnt'].agg([
+    ('rata_rata', 'mean'),
+    ('total', 'sum'),
+    ('minimum', 'min'),
+    ('maksimum', 'max')
+]).round(0)
+
+season_order = ['Spring', 'Summer', 'Fall', 'Winter']
+season_stats = season_stats.reindex([s for s in season_order if s in season_stats.index])
+
+# Identifikasi musim terbaik
+if len(season_stats) > 0:
+    best_season = season_stats['rata_rata'].idxmax()
+    worst_season = season_stats['rata_rata'].idxmin()
+    best_avg = season_stats.loc[best_season, 'rata_rata']
+    worst_avg = season_stats.loc[worst_season, 'rata_rata']
+    perbedaan_persen = ((best_avg - worst_avg) / worst_avg * 100)
+
+    st.info(f"""
+    🏆 **Musim Terbaik:** {best_season} ({best_avg:,.0f} penyewaan/hari)  
+    📉 **Musim Terendah:** {worst_season} ({worst_avg:,.0f} penyewaan/hari)  
+    📊 **Selisih:** {perbedaan_persen:.1f}%
+    """)
+
+# Visualisasi
+col1, col2 = st.columns(2)
+
+with col1:
+    st.subheader("📊 Rata-rata Penyewaan per Musim")
+    
+    if len(season_stats) > 0:
+        fig, ax = plt.subplots(figsize=(8, 5))
+        
+        season_avg = season_stats['rata_rata'].sort_values(ascending=False)
+        
+        # Warna berbeda
+        colors = []
+        for musim in season_avg.index:
+            if musim == best_season:
+                colors.append('#2ecc71')
+            elif musim == worst_season:
+                colors.append('#e74c3c')
+            else:
+                colors.append('#3498db')
+        
+        bars = ax.bar(season_avg.index, season_avg.values, 
+                      color=colors, edgecolor='black', alpha=0.8)
+        
+        # Tambahkan nilai
+        for bar in bars:
+            height = bar.get_height()
+            ax.text(bar.get_x() + bar.get_width()/2., height,
+                    f'{height:.0f}',
+                    ha='center', va='bottom', fontsize=10, fontweight='bold')
+        
+        ax.set_ylabel('Rata-rata Penyewaan', fontsize=11)
+        ax.set_xlabel('Musim', fontsize=11)
+        plt.tight_layout()
+        st.pyplot(fig)
+        plt.close()
+    else:
+        st.warning("Tidak ada data untuk filter yang dipilih")
+
+with col2:
+    st.subheader("👥 Casual vs Registered per Musim")
+    
+    if len(filtered_df) > 0:
+        fig, ax = plt.subplots(figsize=(8, 5))
+        
+        season_detail = filtered_df.groupby('season_name')[['casual', 'registered']].sum()
+        season_detail = season_detail.reindex([s for s in season_order if s in season_detail.index])
+        
+        x = range(len(season_detail))
+        width = 0.35
+        
+        ax.bar([i - width/2 for i in x], season_detail['casual'], 
+               width, label='Casual', color='#f39c12', alpha=0.8)
+        ax.bar([i + width/2 for i in x], season_detail['registered'],
+               width, label='Registered', color='#3498db', alpha=0.8)
+        
+        ax.set_xticks(x)
+        ax.set_xticklabels(season_detail.index)
+        ax.set_ylabel('Total Penyewaan', fontsize=11)
+        ax.set_xlabel('Musim', fontsize=11)
+        ax.legend()
+        plt.tight_layout()
+        st.pyplot(fig)
+        plt.close()
+    else:
+        st.warning("Tidak ada data untuk filter yang dipilih")
+
+# Visualisasi 
+st.subheader("📦 Distribusi Penyewaan per Musim")
+
+if len(filtered_df) > 0:
+    fig, ax = plt.subplots(figsize=(12, 5))
+    
+    available_seasons = [s for s in season_order if s in filtered_df['season_name'].values]
+    
+    sns.boxplot(data=filtered_df, x='season_name', y='cnt', 
+                order=available_seasons, palette='Set2', ax=ax)
+    
+    ax.set_ylabel('Jumlah Penyewaan', fontsize=11)
+    ax.set_xlabel('Musim', fontsize=11)
+    plt.tight_layout()
+    st.pyplot(fig)
+    plt.close()
+else:
+    st.warning("Tidak ada data untuk filter yang dipilih")
+
+# Tabel Statistik
+st.subheader("📋 Tabel Statistik per Musim")
+st.dataframe(season_stats, use_container_width=True)
+
+st.markdown("---")
+
+# PERTANYAAN 2: ANALISIS SUHU
+st.header("🌡️ Pertanyaan 2: Pengaruh Suhu terhadap Penyewaan")
+st.markdown("**Bagaimana pengaruh suhu udara terhadap pola penyewaan casual dan registered users?**")
+
+# Hitung korelasi Pearson (gunakan filtered data)
+if len(filtered_df) > 1:
+    corr_casual, p_casual = pearsonr(filtered_df['temp'], filtered_df['casual'])
+    corr_registered, p_registered = pearsonr(filtered_df['temp'], filtered_df['registered'])
+    corr_total, p_total = pearsonr(filtered_df['temp'], filtered_df['cnt'])
+    
+    # Tampilkan metrik korelasi
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        st.metric(
+            label="📊 Korelasi Casual",
+            value=f"{corr_casual:.3f}",
+            delta="Signifikan ✓" if p_casual < 0.05 else "Tidak Signifikan"
+        )
+    
+    with col2:
+        st.metric(
+            label="📊 Korelasi Registered",
+            value=f"{corr_registered:.3f}",
+            delta="Signifikan ✓" if p_registered < 0.05 else "Tidak Signifikan"
+        )
+    
+    with col3:
+        st.metric(
+            label="📊 Korelasi Total",
+            value=f"{corr_total:.3f}",
+            delta="Signifikan ✓" if p_total < 0.05 else "Tidak Signifikan"
+        )
+    
+    st.info(f"""
+    💡 **Interpretasi:** Casual users (r={corr_casual:.3f}) lebih sensitif terhadap suhu dibanding 
+    Registered users (r={corr_registered:.3f}). Semakin tinggi suhu, semakin banyak penyewaan, 
+    terutama untuk casual users yang cenderung bersepeda untuk rekreasi.
+    """)
+    
+    # Visualisasi
+    st.subheader("📈 Hubungan Suhu dengan Jumlah Penyewaan")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        fig, ax = plt.subplots(figsize=(7, 5))
+        ax.scatter(filtered_df['temp'], filtered_df['casual'], 
+                   alpha=0.5, color='#f39c12', s=30, label='Casual')
+        ax.scatter(filtered_df['temp'], filtered_df['registered'], 
+                   alpha=0.5, color='#3498db', s=30, label='Registered')
+        
+        ax.set_xlabel('Suhu (Normalized)', fontsize=11)
+        ax.set_ylabel('Jumlah Penyewaan', fontsize=11)
+        ax.set_title(f'Casual (r={corr_casual:.2f}) vs Registered (r={corr_registered:.2f})')
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+        plt.tight_layout()
+        st.pyplot(fig)
+        plt.close()
+    
+    with col2:
+        # Bar chart per kategori suhu
+        fig, ax = plt.subplots(figsize=(7, 5))
+        
+        temp_analysis = filtered_df.groupby('temp_category')[['casual', 'registered']].mean()
+        
+        x = range(len(temp_analysis))
+        width = 0.35
+        
+        ax.bar([i - width/2 for i in x], temp_analysis['casual'], 
+               width, label='Casual', color='#f39c12', alpha=0.8)
+        ax.bar([i + width/2 for i in x], temp_analysis['registered'],
+               width, label='Registered', color='#3498db', alpha=0.8)
+        
+        ax.set_xticks(x)
+        ax.set_xticklabels(temp_analysis.index)
+        ax.set_ylabel('Rata-rata Penyewaan', fontsize=11)
+        ax.set_xlabel('Kategori Suhu', fontsize=11)
+        ax.set_title('Rata-rata Penyewaan per Kategori Suhu')
+        ax.legend()
+        plt.tight_layout()
+        st.pyplot(fig)
+        plt.close()
+    
+    # Visualisasi
+    st.subheader("📦 Distribusi Penyewaan per Kategori Suhu")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        fig, ax = plt.subplots(figsize=(7, 5))
+        sns.boxplot(data=filtered_df, x='temp_category', y='casual', 
+                    palette='Oranges', ax=ax)
+        ax.set_ylabel('Casual Users', fontsize=11)
+        ax.set_xlabel('Kategori Suhu', fontsize=11)
+        ax.set_title('Distribusi Casual Users')
+        plt.tight_layout()
+        st.pyplot(fig)
+        plt.close()
+    
+    with col2:
+        fig, ax = plt.subplots(figsize=(7, 5))
+        sns.boxplot(data=filtered_df, x='temp_category', y='registered',
+                    palette='Blues', ax=ax)
+        ax.set_ylabel('Registered Users', fontsize=11)
+        ax.set_xlabel('Kategori Suhu', fontsize=11)
+        ax.set_title('Distribusi Registered Users')
+        plt.tight_layout()
+        st.pyplot(fig)
+        plt.close()
+
+else:
+    st.warning("Data tidak cukup untuk menghitung korelasi (minimal 2 data point)")
+
+st.markdown("---")
+
+# KESIMPULAN
+st.header("📝 Kesimpulan")
 
 col1, col2 = st.columns(2)
 
 with col1:
-    fig, ax = plt.subplots(figsize=(6, 4))
-    colors = ["#4CAF50", "#FF9800", "#F44336", "#2196F3"]
-    bars = ax.bar(season_agg["season_label"], season_agg["total_cnt"],
-                  color=colors, edgecolor="white", linewidth=0.5)
-    for bar, val in zip(bars, season_agg["total_cnt"]):
-        ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 3000,
-                f"{val:,.0f}", ha="center", va="bottom", fontsize=8)
-    ax.set_title("Total Penyewaan per Musim")
-    ax.set_xlabel("Musim")
-    ax.set_ylabel("Total Penyewaan")
-    ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f"{x/1e6:.1f}M"))
-    st.pyplot(fig)
-    plt.close()
+    st.subheader("🍂 Kesimpulan Pertanyaan 1")
+    if len(season_stats) > 0:
+        st.success(f"""
+        **Temuan Utama:**
+        - Musim **{best_season}** mencatat penyewaan tertinggi ({best_avg:,.0f}/hari)
+        - Musim **{worst_season}** memiliki penyewaan terendah ({worst_avg:,.0f}/hari)
+        - Terdapat gap **{perbedaan_persen:.1f}%** antar musim
+        
+        **Rekomendasi:**
+        - Tingkatkan inventory di musim {best_season}
+        - Implementasi promo di musim {worst_season}
+        - Fokus retention untuk registered users
+        """)
+    else:
+        st.info("Pilih filter untuk melihat kesimpulan")
 
 with col2:
-    fig, ax = plt.subplots(figsize=(6, 4))
-    x = np.arange(len(season_agg))
-    w = 0.35
-    ax.bar(x - w/2, season_agg["total_casual"],     width=w, label="Casual",     color="#FF9800")
-    ax.bar(x + w/2, season_agg["total_registered"], width=w, label="Registered", color="#2196F3")
-    ax.set_xticks(x)
-    ax.set_xticklabels(season_agg["season_label"])
-    ax.set_title("Casual vs Registered per Musim")
-    ax.set_xlabel("Musim")
-    ax.set_ylabel("Jumlah Pengguna")
-    ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f"{x/1e3:.0f}K"))
-    ax.legend()
-    st.pyplot(fig)
-    plt.close()
+    st.subheader("🌡️ Kesimpulan Pertanyaan 2")
+    if len(filtered_df) > 1:
+        kekuatan = "kuat" if abs(corr_total) >= 0.7 else "sedang" if abs(corr_total) >= 0.4 else "lemah"
+        st.success(f"""
+        **Temuan Utama:**
+        - Korelasi suhu-penyewaan: **{kekuatan}** (r={corr_total:.3f})
+        - Casual users **lebih sensitif** terhadap suhu (r={corr_casual:.3f})
+        - Registered users **lebih stabil** (r={corr_registered:.3f})
+        
+        **Rekomendasi:**
+        - Weather-based marketing untuk casual users
+        - Dynamic pricing berdasarkan forecast cuaca
+        - Maintain service quality untuk registered users
+        """)
+    else:
+        st.info("Pilih filter untuk melihat kesimpulan")
 
-# Boxplot
-st.markdown("**Distribusi Penyewaan Harian per Musim**")
-fig, ax = plt.subplots(figsize=(10, 3.5))
-order = ["Spring", "Summer", "Fall", "Winter"]
-sns.boxplot(data=df, x="season_label", y="cnt", order=order,
-            palette=["#4CAF50","#FF9800","#F44336","#2196F3"], ax=ax)
-ax.set_title("Distribusi Penyewaan Harian per Musim")
-ax.set_xlabel("Musim")
-ax.set_ylabel("Jumlah Penyewaan")
-st.pyplot(fig)
-plt.close()
-
-# Tabel ringkasan
-st.markdown("**Tabel Statistik per Musim**")
-tabel = df.groupby("season_label")["cnt"].agg(
-    Total="sum", Rata_rata="mean", Minimum="min", Maksimum="max", Std="std"
-).reindex(order).round(1)
-st.dataframe(tabel, use_container_width=True)
-
-st.divider()
-
-# Diagram pertanyaan 2 
-st.subheader("Pertanyaan 2: Korelasi Suhu Udara dengan Jumlah Pengguna")
-
-r_cas, p_cas = stats.pearsonr(df["temp_c"], df["casual"])
-r_reg, p_reg = stats.pearsonr(df["temp_c"], df["registered"])
-r_tot, p_tot = stats.pearsonr(df["temp_c"], df["cnt"])
-
-# Koefisien korelasi
-korcas, korreg, kortot = st.columns(3)
-korcas.metric("Korelasi Casual",     f"{r_cas:.3f}", "Signifikan ✓" if p_cas < 0.05 else "Tidak Signifikan")
-korreg.metric("Korelasi Registered", f"{r_reg:.3f}", "Signifikan ✓" if p_reg < 0.05 else "Tidak Signifikan")
-kortot.metric("Korelasi Total",      f"{r_tot:.3f}", "Signifikan ✓" if p_tot < 0.05 else "Tidak Signifikan")
-
-# Scatter plots
-col3, col4, col5 = st.columns(3)
-
-def scatter_plot(ax, x, y, ylabel, color, r):
-    ax.scatter(x, y, alpha=0.4, s=12, color=color)
-    m, b = np.polyfit(x, y, 1)
-    xl = np.linspace(x.min(), x.max(), 200)
-    ax.plot(xl, m*xl + b, color="red", lw=1.5, linestyle="--", label=f"r = {r:.3f}")
-    ax.set_xlabel("Suhu (°C)")
-    ax.set_ylabel(ylabel)
-    ax.legend(fontsize=9)
-
-with col3:
-    fig, ax = plt.subplots(figsize=(4.5, 4))
-    scatter_plot(ax, df["temp_c"], df["casual"], "Casual", "#FF9800", r_cas)
-    ax.set_title("Suhu vs Casual Users")
-    st.pyplot(fig); plt.close()
-
-with col4:
-    fig, ax = plt.subplots(figsize=(4.5, 4))
-    scatter_plot(ax, df["temp_c"], df["registered"], "Registered", "#2196F3", r_reg)
-    ax.set_title("Suhu vs Registered Users")
-    st.pyplot(fig); plt.close()
-
-with col5:
-    fig, ax = plt.subplots(figsize=(4.5, 4))
-    scatter_plot(ax, df["temp_c"], df["cnt"], "Total", "#9C27B0", r_tot)
-    ax.set_title("Suhu vs Total Penyewaan")
-    st.pyplot(fig); plt.close()
-
-# Heatmap korelasi
-st.markdown("**Heatmap Korelasi Variabel Numerik**")
-fig, ax = plt.subplots(figsize=(8, 4))
-corr_cols = df[["temp_c","hum","windspeed","casual","registered","cnt"]].rename(columns={
-    "temp_c":"Suhu(°C)", "hum":"Kelembapan",
-    "windspeed":"Angin", "casual":"Casual",
-    "registered":"Registered", "cnt":"Total"
-})
-sns.heatmap(corr_cols.corr(), annot=True, fmt=".2f",
-            cmap="coolwarm", ax=ax, linewidths=0.5)
-ax.set_title("Heatmap Korelasi")
-st.pyplot(fig); plt.close()
-
-# Tren bulanan
-st.markdown("**Tren Suhu & Penyewaan per Bulan**")
-month_agg = df.groupby("mnth").agg(
-    avg_temp=("temp_c","mean"), avg_cnt=("cnt","mean"),
-    avg_casual=("casual","mean"), avg_registered=("registered","mean")
-).reset_index()
-MONTHS = ["Jan","Feb","Mar","Apr","Mei","Jun","Jul","Agu","Sep","Okt","Nov","Des"]
-
-fig, ax1 = plt.subplots(figsize=(11, 4))
-ax2 = ax1.twinx()
-ax1.fill_between(month_agg["mnth"], month_agg["avg_casual"],     alpha=0.4, color="#FF9800", label="Casual")
-ax1.fill_between(month_agg["mnth"], month_agg["avg_registered"], alpha=0.3, color="#2196F3", label="Registered")
-ax1.plot(month_agg["mnth"], month_agg["avg_cnt"], color="black", lw=2, marker="o", markersize=4, label="Total")
-ax2.plot(month_agg["mnth"], month_agg["avg_temp"], color="red", lw=2, linestyle="--", marker="s", markersize=4, label="Suhu °C")
-ax1.set_xticks(range(1,13)); ax1.set_xticklabels(MONTHS)
-ax1.set_ylabel("Rata-rata Penyewaan"); ax2.set_ylabel("Suhu (°C)", color="red")
-ax2.tick_params(colors="red")
-ax1.set_title("Tren Suhu & Penyewaan per Bulan")
-l1, lb1 = ax1.get_legend_handles_labels()
-l2, lb2 = ax2.get_legend_handles_labels()
-ax1.legend(l1+l2, lb1+lb2, loc="upper left", fontsize=8)
-st.pyplot(fig); plt.close()
-
-st.divider()
-
-# KESIMPULAN
-
-st.subheader("Kesimpulan")
-
-best  = season_agg.loc[season_agg["total_cnt"].idxmax(), "season_label"]
-worst = season_agg.loc[season_agg["total_cnt"].idxmin(), "season_label"]
-pct   = (season_agg["total_cnt"].max() - season_agg["total_cnt"].min()) / season_agg["total_cnt"].min() * 100
-level = "kuat" if abs(r_tot) >= 0.7 else "sedang"
-
-c1, c2 = st.columns(2)
-with c1:
-    st.info(f"""**🍂 Musim & Penyewaan**
-
-Musim **{best}** mencatat penyewaan tertinggi, sedangkan **{worst}** terendah 
-dengan selisih hingga **{pct:.1f}%**. Musim panas dan gugur mendominasi karena 
-cuaca lebih mendukung aktivitas luar ruangan.""")
-
-with c2:
-    st.info(f"""**🌡️ Suhu & Pengguna**
-
-Terdapat korelasi positif **{level}** antara suhu dan total penyewaan (r = {r_tot:.3f}). 
-Casual users (r = {r_cas:.3f}) lebih sensitif terhadap suhu dibanding 
-registered users (r = {r_reg:.3f}), karena casual users cenderung bersepeda 
-untuk rekreasi saat cuaca hangat.""")
+st.markdown("---")
